@@ -82,38 +82,34 @@ func processTask(api *taskqueue.Service, projectID string, queueName string, lea
 	chErr2 := make(chan error, 1)
 	chCancel := make(chan string, 1)
 	go func() {
-		for {
-			select {
-			case <-chCancel:
-				return
-			case <-time.After(time.Second * time.Duration(leaseSecs-10)):
-				// 間に合わなさそうだったら、地味に伸ばす
-				log.Printf("%s : %s task extension lease time.", queueName, task.Id)
-				task.QueueName = queueName
-				newTask, err := api.Tasks.Update(projectID, queueName, task.Id, leaseSecs, task).Do()
-				if err != nil {
-					chErr2 <- fmt.Errorf("queue %s task %s update failure : %s", queueName, task.Id, err.Error())
-				}
-				log.Printf("%s new lease time set. new task = %v", task.Id, newTask)
-				return
+		select {
+		case <-chCancel:
+			return
+		case <-time.After(time.Second * time.Duration(leaseSecs-10)):
+			// 間に合わなさそうだったら、地味に伸ばす
+			log.Printf("%s : %s task extension lease time.", queueName, task.Id)
+			task.QueueName = queueName
+			newTask, err := api.Tasks.Update(projectID, queueName, task.Id, leaseSecs, task).Do()
+			if err != nil {
+				chErr2 <- fmt.Errorf("queue %s task %s update failure : %s", queueName, task.Id, err.Error())
 			}
+			log.Printf("%s new lease time set. new task = %v", task.Id, newTask)
+			return
 		}
 	}()
 
-	for {
-		select {
-		case err := <-chErr1:
-			chCancel <- "cancel"
-			if err != nil {
-				return fmt.Errorf("task %s process failure : %s", task.Id, err.Error())
-			}
-			return nil
-		case err := <-chErr2:
-			if err != nil {
-				return fmt.Errorf("task %s update failure : %s", task.Id, err.Error())
-			}
-			return nil
+	select {
+	case err := <-chErr1:
+		chCancel <- "cancel"
+		if err != nil {
+			return fmt.Errorf("task %s process failure : %s", task.Id, err.Error())
 		}
+		return nil
+	case err := <-chErr2:
+		if err != nil {
+			return fmt.Errorf("task %s update failure : %s", task.Id, err.Error())
+		}
+		return nil
 	}
 }
 
