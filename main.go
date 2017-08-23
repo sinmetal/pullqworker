@@ -26,14 +26,14 @@ func main() {
 
 	client, err := google.DefaultClient(context.Background(), taskqueue.TaskqueueScope)
 
-	err = run(client, projectID, "pullqueue", 10, 60)
-	if err != nil {
-		log.Fatalln(err.Error())
-		os.Exit(1)
+	for {
+		err = run(client, projectID, "pull-queue", 10, 60)
+		if err != nil {
+			log.Fatalf("run failure %s", err.Error())
+			os.Exit(1)
+		}
+		log.Print("loop...")
 	}
-
-	log.Println("Done")
-	os.Exit(0)
 }
 
 func run(client *http.Client, projectID string, queueName string, numTasks, leaseSecs int64) error {
@@ -46,6 +46,7 @@ func run(client *http.Client, projectID string, queueName string, numTasks, leas
 	if err != nil {
 		return fmt.Errorf("Lease Tasks: %s", err.Error())
 	}
+	log.Printf("lease task len = %d", len(tasks.Items))
 
 	var wg sync.WaitGroup
 	for _, task := range tasks.Items {
@@ -70,33 +71,37 @@ func processTask(api *taskqueue.Service, projectID string, queueName string, lea
 
 	chErr1 := make(chan error, 1)
 	go func() {
+		// TODO processing task
 		// time.Sleep(time.Second * 20)
 
 		log.Printf("%s task complete.\n", task.Id)
 		err := api.Tasks.Delete(projectID, queueName, task.Id).Do()
 		if err != nil {
 			chErr1 <- fmt.Errorf("%s task delete miss. err = %s", task.Id, err.Error())
+			return
 		}
+		chErr1 <- nil
 	}()
 
 	chErr2 := make(chan error, 1)
 	chCancel := make(chan string, 1)
-	go func() {
+	go func(taskID string) {
 		select {
 		case <-chCancel:
+			log.Printf("update %s task cancel!", taskID)
 			return
 		case <-time.After(time.Second * time.Duration(leaseSecs-10)):
 			// 間に合わなさそうだったら、地味に伸ばす
-			log.Printf("%s : %s task extension lease time.", queueName, task.Id)
+			log.Printf("%s : %s task extension lease time.", queueName, taskID)
 			task.QueueName = queueName
 			newTask, err := api.Tasks.Update(projectID, queueName, task.Id, leaseSecs, task).Do()
 			if err != nil {
-				chErr2 <- fmt.Errorf("queue %s task %s update failure : %s", queueName, task.Id, err.Error())
+				chErr2 <- fmt.Errorf("queue %s task %s update failure : %s", queueName, taskID, err.Error())
 			}
-			log.Printf("%s new lease time set. new task = %v", task.Id, newTask)
+			log.Printf("%s new lease time set. new task = %v", taskID, newTask)
 			return
 		}
-	}()
+	}(task.Id)
 
 	select {
 	case err := <-chErr1:
